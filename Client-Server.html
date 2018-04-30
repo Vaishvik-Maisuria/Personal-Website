@@ -1,0 +1,253 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+  <head>
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="stylesheet" href="/~209/styles.css" type="text/css" media="screen" />
+    <link rel="stylesheet" href="/~209/print.css" type="text/css" media="print" />
+
+    <title>
+      CSC 209H: Assignment 4 -- a Client and Server
+    </title>
+  </head>
+
+  <body>
+
+<div class="title">
+    <h1>
+     Assignment 4: a Client and Server
+    </h1>
+    </div>
+
+
+<div class="content">
+
+<h2><font color=red>Warning</font></h2>
+
+<p>
+    In this assignment, you will create a server that executes commands on your machine. Obviously,
+    this is dangerous. Your program should use the provided <tt>sprintf</tt> call to create
+    the path and name of executables. Furthermore, you should use <tt>basename</tt> to
+    extract only the last component of the executable name provided by the user. Finally,
+    you should carefully consider what executables and links (if any) you place in the
+    directory where job executables are stored. (You already have one executable in place for
+    testing.)
+</p>
+
+<p>
+    Please also make sure that your clients and servers are shut down when you are not actively
+    using them, to avoid port conflicts. Also, since you are using <tt>fork</tt>
+    in this assignment, verify <i>frequently</i> that you are not creating stray processes.
+</p>
+
+<h2> Overview </h2>
+
+<p>
+    Your job is to build both a client and a server that implement a <i>task management protocol</i>.
+    The protocol allows a client to connect to a server to run jobs. The client can request that
+    jobs be created or killed and receives the output of these jobs. Systems like these are used in
+    <a href="https://en.wikipedia.org/wiki/Computer_cluster">cluster environments</a>
+    to allow users to manage tasks being run on the cluster. In reality, the
+    client would connect to a front end which would distribute jobs to the cluster; in this assignment,
+    you're creating the client and the server that would run on a single cluster computer (not the
+    front-end that monitors the entire cluster and distributes jobs).
+</p>
+
+<p>
+    You have been provided with starter code for the client (<tt>jobclient.c</tt>) and server
+    (<tt>jobserver.c</tt>). Both of these files rely on structs and variables defined in <tt>jobprotocol.h</tt>
+    (currently mostly empty) and can use helpers stored in <tt>jobprotocol.c</tt> (currently totally empty).
+    Both also rely on
+    <tt>socket.c</tt>, the socket helper that we provided for lab and used in lecture. You may
+    modify any of the <tt>job*</tt> files, but please do not modify the <tt>socket.*</tt> files.
+</p>
+
+<p>
+    You have also been provided with a <tt>Makefile</tt> that creates the <tt>jobclient</tt> and
+    <tt>jobserver</tt> executables and also builds the jobs in the <tt>jobs</tt> directory. Please
+    do not modify this <tt>Makefile</tt>. You may, however, add additional executables to the <tt>jobs</tt>
+    directory and modify the <tt>Makefile</tt> in that directory to build the new executables, but
+    <b>you should be very careful about what executables you add</b>. Anyone who connects to your
+    server would be able to run them.
+</p>
+
+<p>
+    As you review the requirements and read the starter code, you will see that the code you have
+    written in lab will be very useful. You may use any code that you have written for a lab.
+</p>
+
+<p>
+    You will also notice that we have provided very little guidance about how to implement the two
+    required programs. That's by design. This assignment is a capstone for the course. It asks you
+    to use dynamic memory, to check errors carefully, to <tt>fork</tt> and <tt>exec</tt>, and to use
+    <tt>pipe</tt>, <tt>dup2</tt>, and <tt>select</tt>. You're given significant freedom to build this
+    program using the tools you have available. Show us what you've learned!
+</p>
+
+<h2> Requirements </h2>
+
+<p>
+    Your client and server must, jointly, implement the protocol described in this section. Note that
+    we may use our own client with your server (and vice versa) during testing to verify that your
+    code implements the protocol as defined. We will also test your client and server together.
+</p>
+
+<h3> The Protocol </h3>
+
+<p>
+    The protocol consists of network-newline terminated messages. Each message sent from the client to
+    the server is a <i>command</i> to be executed by the server. Each message from the server to the
+    client is an <i>output</i> to be displayed on the client's <tt>STDOUT</tt>. No single command or line
+    of output can exceed <i>BUFSIZE</i> characters (defined in the .h file).
+</p>
+
+<p>
+    The following <i>commands</i> are supported:
+</p>
+
+<ul>
+    <li><b>jobs</b>: Upon receipt, the server should send a message to the client, "<tt>[SERVER] pid pid pid ...</tt>",
+    where the PIDs of the currently running jobs are separated by spaces. The PIDs should be presented in
+    the order in which they were created. If there are no currently running jobs, the message should
+    read, "<tt>[SERVER] No currently running jobs</tt>".<br /><br />
+
+    This will require that the server maintain a list of jobs. Info for each job should be stored in a struct.
+    Since the number of executing jobs is bounded by <tt>MAXJOBS</tt>, you could use an array, but it might make
+    sense to use a linked list instead.
+    </li><br />
+
+    <li><b>run <i>jobname</i> [<i>arg</i>]...</b>: Upon receipt, the server should attempt to execute the
+    job named <i>jobname</i>, passing it the arguments (0 or more) provided. To protect against forkbombs, the
+    server should keep a count of the jobs currently active; if creating another job would exceed <tt>MAXJOBS</tt>,
+    then the server should not create the job. It should send the client the message, <tt>"[SERVER] MAXJOBS exceeded</tt>".<br /><br />
+
+    If the job may be created, the client should automatically be
+    set to <i>watch</i> (see below) the newly created job and should be sent the output, <tt>"[SERVER] Job %d
+    created"</tt> where %d is the PID of the created job. If the job cannot actually be created (perhaps because
+    of an <tt>exec</tt> error), then an appropriate message should be generated using <tt>perror</tt>
+    (which will cause the error message to be sent to the client, since it is watching the job).<br /><br />
+
+    This will require <tt>fork</tt>, <tt>exec</tt>, <tt>pipe</tt>, and <tt>dup2</tt>. (Please do not use
+    <tt>popen</tt>, <tt>system</tt>, etc. to run the commands for you.)
+    </li><br />
+
+    <li><b>kill <i>pid</i></b>: Upon receipt, the server should attempt to send a kill signal to the job
+    specified by <i>pid</i>. If <i>pid</i> doesn't refer to a currently executing job that was created by
+    the server, the server should send the client the message, <tt>"[SERVER] Job %d not found"</tt>.
+    </li><br />
+
+    <li><b>watch <i>pid</i></b>: Upon receipt, the server should set the client to watch the specified job.
+    If the <i>pid</i> doesn't refer to a currently executing job, the client should receive the same error
+    message as is sent for <tt>kill</tt>. If the client is not yet watching the job, then the client should
+    be added the set of watchers and the message, <tt>"[SERVER] Watching job %d"</tt> should be sent. If the
+    client is already watching the job, then the client is removed from the set of watchers and the message,
+    <tt>"[SERVER] No longer watching job %d"</tt> should be sent.
+    </li><br />
+
+    <li><b>exit</b>: This command is not transmitted to the server. It causes the client to exit with status code 0.
+    </li>
+</ul>
+
+<p>
+    Both the client and server should be resilient to invalid commands. The client should reject invalid commands with
+    the response "<tt>Command not found</tt>". If the server receives an invalid command (perhaps from a misbehaving client), it should respond with, "<tt>[SERVER] Invalid command: %s</tt>" where %s is the command the server received.
+</p>
+
+<h3>Other Properties</h3>
+
+<p>
+    <b>Network Newlines</b>: Both the client and server should replace network newlines in commands and output with
+    the newlines appropriate for the system before displaying them.
+</p>
+
+<p>
+    <b>Logging</b>: The server should maintain a log by displaying every command it receives, every response
+    it sends (strings prefixed by "<tt>[SERVER]</tt>"), and all of the output received from jobs. Commands
+    received from clients should be prefixed by "<tt>[CLIENT %d]</tt>" (and a space), where %d is the client's
+    socket descriptor. Output received from jobs on their <tt>STDOUT</tt> should be prefixed by "<tt>[JOB %d]</tt>"
+    (and a space), where %d is the job's PID.  Output received from jobs on their <tt>STDERR</tt> should be
+    prefixed by "<tt>*(JOB %d)*</tt>" (yes, and a space).
+</p>
+
+<p>
+    <b>Targeted Messages</b>: This should go without saying, but output should only be sent to the relevant
+    clients. If client A sends a command, then only client A should get a response. (Client B shouldn't see
+    the error or success message.) Only the clients watching a job should receive output from that job.
+</p>
+
+<p>
+    <b>Watching</b>: A client that is <t>watching</t> a job should be sent any output that job generates. The
+    output should be prefixed by "<tt>[JOB %d]</tt>" or <tt>*(JOB %d)*</tt>", just like the output generated on
+    the server.<br /><br />
+
+    This feature requires that the server track which clients are watching a specific job. The number of clients
+    that could watch a job is not bounded, so this suggests a linked structure.
+</p>
+
+<p>
+    <b>Buffering</b>: Both the client and server should buffer. The client should not display output until
+    a full line is received and should send a single command at a time. The server should only send full
+    lines of output, and it should wait to receive a full command before evaluating it and attempting to
+    execute it. (Why do we have to buffer when both the client and server are sending full messages? Recall
+    that the network itself may fragment the messages.)
+</p>
+
+<p>
+    <b>Minimal Waiting</b>: This requirement is related to <i>buffering</i>. I/O needs to be handled with
+    minimal waiting. The clients should receive output even while they're waiting for input from the user.
+    The server should handle inputs from the jobs and clients as they are received; no <tt>read</tt> that
+    it issues should block, and inputs shouldn't wait for a job to finish executing, for example..<br /><br />
+
+    This requires careful use of <tt>select</tt>.
+</p>
+
+<p>
+    <b>Client Termination</b>: When a client exits, it should always try to close the
+    socket to the server. The server, upon receiving a socket close, should clean up its data structures and then
+    log the exit of the client with the message, "<tt>[CLIENT %d] Connection closed</tt>".<br /><br />
+
+    The normal exit status of the client should be a 0. It should exit with a 1 (and emit an appropriate message
+    with <tt>perror</tt>) if a system or library call fails (including when the server socket closes).
+</p>
+
+<p>
+    <b>Job Termination</b>: Jobs are separate executables outside of the protocol, so we cannot put many requirements
+    on them. However, the server should generate a message to all clients watching the job when a job exits. <b>Update (March 30)</b>: If the process exits, then the message should be, "<tt>[JOB %d] Exited with status %d</tt>." Otherwise (if the program exited due to a signal), the message should be, "<tt>[Job %d] Exited due to signal</tt>."
+</p>
+
+<p>
+    <b>Server Termination</b>: When a server exits, it should always try to close all of the client sockets (first)
+    and then terminate all running jobs (second).  The clients should be sent the message, "<tt>[SERVER] Shutting down</tt>".
+</p>
+
+<p>
+    When might a server terminate? In most cases, errors should be handled without termination. If a client socket closes, for example, that doesn't mean that the <tt>read</tt> error it generates should terminate the server. If
+    a library or system call error is unrecoverable, exit with status code 1 after cleaning up. The other way the
+    server could terminate is if it receives <tt>SIGINT</tt> (Ctrl-C). In that case, the system should clean up
+    and then exit with status code 0. (Any other signal should simply terminate the server; it may not clean up if
+    it receives a SIGTERM, for example.)
+</p>
+
+
+</div>
+<div class="spacer" />
+
+  <!-- Google Analytics: default -->
+  <script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-6874918-3']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+  </script>
+  
+</body>
+</html>
+
